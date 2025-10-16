@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Control Page - Auth</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        * { box-sizing: border-box; }
+        body {
+            font-family: Lato, sans-serif;
+            padding: 40px;
+            max-width: 1280px;
+            margin: 0 auto;
+            background: #f5f5f5;
+        }
+        .bloc {
+            background: white;
+            border: 1px solid #000;
+            margin-bottom: 20px;
+            padding: 20px;
+            border-radius: 4px;
+        }
+        h4 {
+            margin-top: 0;
+            font-size: 18px;
+            text-transform: uppercase;
+        }
+        .form-row {
+            margin-bottom: 15px;
+        }
+        input[type="text"],
+        input[type="password"] {
+            width: 100%;
+            height: 40px;
+            padding: 8px 12px;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+            font-size: 14px;
+        }
+        button {
+            background: #000;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            cursor: pointer;
+            border-radius: 3px;
+            font-size: 14px;
+        }
+        button:hover {
+            background: #333;
+        }
+        .success {
+            color: #5ae799;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .error {
+            color: #b81515;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        .connected-info {
+            background: #f5b800;
+            padding: 10px;
+            border-radius: 3px;
+            margin: 10px 0;
+            font-weight: bold;
+        }
+        .user-list {
+            display: grid;
+            gap: 10px;
+        }
+        .user-item {
+            padding: 10px;
+            background: #f9f9f9;
+            border: 1px solid #ddd;
+            border-radius: 3px;
+            display: flex;
+            justify-content: space-between;
+        }
+        .user-name {
+            font-weight: bold;
+        }
+        .hide {
+            display: none;
+        }
+        .logout-btn {
+            background: #b81515;
+            margin-left: 10px;
+        }
+        .logout-btn:hover {
+            background: #8b0000;
+        }
+    </style>
+</head>
+<body>
+    <div class="bloc">
+        <h4>🔐 Connexion</h4>
+        
+        <div id="loginSection">
+            <div class="form-row">
+                <input type="text" id="loginUsername" placeholder="Username" />
+            </div>
+            <div class="form-row">
+                <input type="password" id="loginPassword" placeholder="Password" />
+            </div>
+            <button onclick="handleLogin()">Se connecter</button>
+            <div id="loginMessage"></div>
+        </div>
+
+        <div id="connectedSection" class="hide">
+            <div class="connected-info">
+                Connecté en tant que : <span id="currentUsername"></span>
+                <button class="logout-btn" onclick="handleLogout()">Déconnexion</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="bloc">
+        <h4>📝 Créer un compte</h4>
+        <div class="form-row">
+            <input type="text" id="signupUsername" placeholder="Username" />
+        </div>
+        <div class="form-row">
+            <input type="password" id="signupPassword" placeholder="Password" />
+        </div>
+        <button onclick="handleSignup()">Créer mon compte</button>
+        <div id="signupMessage"></div>
+    </div>
+
+    <div class="bloc">
+        <h4>👥 Liste des membres</h4>
+        <div id="userList" class="user-list">
+            <div>Chargement...</div>
+        </div>
+    </div>
+
+    <script>
+        // Configuration Supabase
+        const SUPABASE_URL = 'https://ksnmudfyaotfeqdwpgcj.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imtzbm11ZGZ5YW90ZmVxZHdwZ2NqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA0NDg3MTQsImV4cCI6MjA3NjAyNDcxNH0.s8_0egxdZHG4TTi8fpzhGXRDnry07KLBkl9PMjFENFQ';
+        
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // Session utilisateur (stockée en mémoire pour Claude.ai)
+        let currentUser = null;
+
+        // Hash simple du password (utiliser bcrypt dans un vrai projet)
+        async function hashPassword(password) {
+            const msgBuffer = new TextEncoder().encode(password);
+            const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        // Créer un compte
+        async function handleSignup() {
+            const username = document.getElementById('signupUsername').value.trim();
+            const password = document.getElementById('signupPassword').value;
+            const messageEl = document.getElementById('signupMessage');
+
+            if (!username || !password) {
+                messageEl.innerHTML = '<div class="error">Remplis tous les champs !</div>';
+                return;
+            }
+
+            if (password.length < 6) {
+                messageEl.innerHTML = '<div class="error">Le mot de passe doit contenir au moins 6 caractères !</div>';
+                return;
+            }
+
+            try {
+                // Vérifier si le username existe déjà
+                const { data: existing } = await supabase
+                    .from('profiles')
+                    .select('username')
+                    .eq('username', username)
+                    .single();
+
+                if (existing) {
+                    messageEl.innerHTML = '<div class="error">Ce username existe déjà !</div>';
+                    return;
+                }
+
+                // Hash du password
+                const hashedPassword = await hashPassword(password);
+
+                // Insertion dans la DB
+                const { data, error } = await supabase
+                    .from('profiles')
+                    .insert([
+                        { username: username, password: hashedPassword }
+                    ])
+                    .select();
+
+                if (error) throw error;
+
+                messageEl.innerHTML = '<div class="success">✅ Compte créé avec succès !</div>';
+                document.getElementById('signupUsername').value = '';
+                document.getElementById('signupPassword').value = '';
+                
+                // Recharger la liste
+                loadUserList();
+
+            } catch (error) {
+                messageEl.innerHTML = `<div class="error">Erreur : ${error.message}</div>`;
+                console.error('Erreur signup:', error);
+            }
+        }
+
+        // Connexion
+        async function handleLogin() {
+            const username = document.getElementById('loginUsername').value.trim();
+            const password = document.getElementById('loginPassword').value;
+            const messageEl = document.getElementById('loginMessage');
+
+            if (!username || !password) {
+                messageEl.innerHTML = '<div class="error">Remplis tous les champs !</div>';
+                return;
+            }
+
+            try {
+                const hashedPassword = await hashPassword(password);
+
+                const { data, error } = await supabase
+                    .from('profiles')
+                    .select('*')
+                    .eq('username', username)
+                    .eq('password', hashedPassword)
+                    .single();
+
+                if (error || !data) {
+                    messageEl.innerHTML = '<div class="error">❌ Username ou password incorrect !</div>';
+                    return;
+                }
+
+                // Stocker la session EN MÉMOIRE (pour Claude.ai - fonctionne pendant la session uniquement)
+                currentUser = data;
+
+                messageEl.innerHTML = '<div class="success">✅ Connexion réussie !</div>';
+                
+                // Afficher l'état connecté
+                document.getElementById('loginSection').classList.add('hide');
+                document.getElementById('connectedSection').classList.remove('hide');
+                document.getElementById('currentUsername').textContent = data.username;
+
+                document.getElementById('loginUsername').value = '';
+                document.getElementById('loginPassword').value = '';
+
+                setTimeout(() => {
+                    messageEl.innerHTML = '';
+                }, 3000);
+
+            } catch (error) {
+                messageEl.innerHTML = `<div class="error">Erreur : ${error.message}</div>`;
+                console.error('Erreur login:', error);
+            }
+        }
+
+        // Déconnexion
+        function handleLogout() {
+            currentUser = null;
+            
+            document.getElementById('loginSection').classList.remove('hide');
+            document.getElementById('connectedSection').classList.add('hide');
+            document.getElementById('loginMessage').innerHTML = '<div class="success">Déconnecté !</div>';
+            
+            setTimeout(() => {
+                document.getElementById('loginMessage').innerHTML = '';
+            }, 2000);
+        }
+
+        // Charger la liste des utilisateurs
+        async function loadUserList() {
+            const listEl = document.getElementById('userList');
+
+            try {
+                const { data, error } = await supabase
+                    .from('profiles')
+                    .select('id, username, created_at')
+                    .order('created_at', { ascending: false });
+
+                if (error) throw error;
+
+                if (!data || data.length === 0) {
+                    listEl.innerHTML = '<div>Aucun membre pour le moment</div>';
+                    return;
+                }
+
+                listEl.innerHTML = data.map(user => `
+                    <div class="user-item">
+                        <span class="user-name">${user.username}</span>
+                        <span style="color: #666; font-size: 12px;">
+                            Inscrit le ${new Date(user.created_at).toLocaleDateString('fr-FR')}
+                        </span>
+                    </div>
+                `).join('');
+
+            } catch (error) {
+                listEl.innerHTML = `<div class="error">Erreur : ${error.message}</div>`;
+                console.error('Erreur chargement users:', error);
+            }
+        }
+
+        // Vérifier session au chargement
+        function checkSession() {
+            // Session en mémoire uniquement pour Claude.ai
+            // Dans ton projet GitHub, tu peux utiliser localStorage ici
+        }
+
+        // Initialisation
+        checkSession();
+        loadUserList();
+
+        // Auto-refresh de la liste toutes les 30 secondes
+        setInterval(loadUserList, 30000);
+    </script>
+</body>
+</html>
